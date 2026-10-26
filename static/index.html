@@ -333,6 +333,8 @@
 
   /* экран подключения */
   #conn-screen { justify-content: center; align-items: center; min-height: 80vh; }
+  #discovery-offline-slot { width:100%;max-width:900px; }
+  #discovery-card .set-head { justify-content:space-between;flex-wrap:wrap; }
   .conn-card { max-width: 560px; width: 100%; text-align: center; align-items: center; gap: 12px; padding: 36px 32px 28px; }
   .conn-card h1 { margin: 6px 0 0; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; }
   .conn-card p { margin: 0; color: var(--text-2); max-width: 440px; }
@@ -666,6 +668,7 @@
       </form>
       <details id="cs-log-box" hidden><summary>Лог подключения</summary><pre class="out" id="cs-log"></pre></details>
     </section>
+    <div id="discovery-offline-slot"></div>
   </main>
 
   <!-- ================= ОБЗОР ================= -->
@@ -870,6 +873,23 @@
   <main id="tab-settings" data-page hidden>
     <header class="page-head"><div><h1>Настройки</h1><div class="sub">Оформление, доступ к панели и то, что панель хранит на колонке</div></div></header>
     <div class="settings">
+      <div id="discovery-settings-slot">
+        <section class="card set-card" id="discovery-card" hidden>
+          <div class="set-head"><div><h2>Колонки в сети</h2><p id="discovery-state" role="status" aria-live="polite">Ищем колонки…</p></div><button class="btn sm" id="discovery-scan">Найти сейчас</button></div>
+          <p class="set-note" id="discovery-networks"></p>
+          <div id="discovery-list"></div>
+          <p class="set-note" id="discovery-error" role="alert" hidden></p>
+          <details class="set-note"><summary>Параметры поиска</summary>
+            <form id="discovery-form">
+              <label class="set-item"><div class="set-label"><b>Автопоиск</b><small>При запуске панели и каждые две минуты</small></div><input id="discovery-auto" type="checkbox" class="switch" checked></label>
+              <label class="set-item"><div class="set-label"><b>Порты ADB</b><small>Через запятую, если портов несколько</small></div><input id="discovery-ports" class="field" value="5555" required aria-label="Порты ADB"></label>
+              <label class="set-item"><div class="set-label"><b>Локальные сети</b><small>Пусто — определить автоматически. До 1024 адресов.</small></div><input id="discovery-ranges" class="field" placeholder="192.168.1.0/24" aria-label="Сети для поиска"></label>
+              <button class="btn" type="submit" id="discovery-save">Сохранить и найти</button>
+            </form>
+          </details>
+          <p class="set-note">Поиск выполняется в сети сервера панели. Для обнаружения колонке нужен доступ по ADB. Каждая колонка открывается в своей панели.</p>
+        </section>
+      </div>
 
 
       <section class="card set-card">
@@ -3638,6 +3658,7 @@ const CONN_TEXT = {
   server: ['Сервер панели не отвечает', 'Проверьте, что server.py запущен, — страница переподключится сама.', ''],
   connecting: ['Подключаемся к колонке', 'Устанавливаем соединение по adb…', ''],
   waiting: ['Ожидание колонки', 'Колонка пока не в сети: включите её или проверьте Wi‑Fi. Панель подключится сама, как только она появится.', 'wait'],
+  select: ['Выберите колонку', 'Откройте найденную колонку в списке ниже. Поиск выполняется автоматически.', 'wait'],
   adb_error: ['Нет подключения по adb', 'Колонка в сети, но adb не отвечает.', 'err'],
   locked: ['Вход в панель', 'Панель защищена паролем.', 'lock'],
 };
@@ -3722,6 +3743,7 @@ connCheck();
 document.addEventListener('DOMContentLoaded',()=>{if(online&&!$('#tab-console').hidden)termConnect();});
 </script>
 <script src="static/assistant.js"></script>
+<script src="static/discovery.js"></script>
 <script src="static/vendor/qrcode.js"></script>
 <script src="static/vendor/xterm/xterm.js"></script>
 <script src="static/vendor/xterm/addon-fit.js"></script>

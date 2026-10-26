@@ -15,7 +15,7 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/$NAME/runtime/python" "$OUT"
 cd "$ROOT"
 sh tools/build-assistant.sh
-cp -r server.py access.py glagol.py assistant.py profiles.py multi.py speakers.example.json VERSION static device 3d start.bat LICENSE README.md CONTRIBUTION.md "$WORK/$NAME/"
+cp -r server.py access.py glagol.py assistant.py profiles.py multi.py discovery.py speakers.example.json VERSION static device 3d start.bat LICENSE README.md CONTRIBUTION.md "$WORK/$NAME/"
 curl -fsSL -o "$WORK/python.zip" "https://www.python.org/ftp/python/$PYVER/python-$PYVER-embed-$ARCH.zip"
 unzip -q "$WORK/python.zip" -d "$WORK/$NAME/runtime/python"
 # портативный Python не видит папку скрипта — добавляем корень панели (путь относительно ._pth)

@@ -450,7 +450,7 @@ class Connection:
         return self.info()
 
     def info(self):
-        return {"state": self.state, "serial": self.adb.serial, "since": self.since, "attempts": self.attempts,
+        return {"state": self.state, "serial": '' if self.adb.serial == '__select_speaker__' else self.adb.serial, "since": self.since, "attempts": self.attempts,
                 "retry_in": max(0, round(self.retry_at - time.time())) if self.state == "adb_error" else None,
                 "log": list(self.log)}
 
@@ -493,6 +493,8 @@ class Connection:
     def run(self):
         network = bool(self.adb.serial and ":" in self.adb.serial)
         while True:
+            if self.adb.serial == '__select_speaker__':
+                self._set('select');self._sleep(3);continue
             state, err = self._adb_state()
             if state == "device" and network and not self._reachable():
                 self.note(f"{self.adb.serial} пропала из сети", "warn")
@@ -2409,6 +2411,13 @@ class Handler(BaseHTTPRequestHandler):
         """True — запрос уже отклонён. POST с чужого сайта (CSRF) режем всегда, даже без пароля:
         иначе любая открытая вкладка могла бы дёрнуть /api/shell на localhost."""
         # Optional private worker: local listener + per-run key, never a LAN bypass.
+        if path.startswith('/api/discovery') and self.command == 'POST':
+            if self.headers.get('Origin') == 'null' or self.headers.get('Content-Type','').split(';')[0].strip() != 'application/json':
+                self._send(415, {'error':'Параметры поиска принимаются только как JSON из панели'})
+                return True
+            if int(self.headers.get('Content-Length') or 0) > 4096:
+                self._send(413, {'error':'Слишком большой запрос поиска'})
+                return True
         if path.startswith("/api/assistant") and self.command == "POST":
             if self.headers.get("Origin") == "null" or self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
                 self._send(415, {"error": "Настройки принимаются только как JSON из панели"})
@@ -2715,7 +2724,7 @@ class PanelUpdater:
     """Проверка новых релизов панели на GitHub и обновление — в зависимости от того, как панель установлена:
     zip (Windows-сборка, Download ZIP) — скачать релиз и заменить файлы панели; git — git pull --ff-only;
     docker — только подсказать команду (образ изнутри не обновить)."""
-    FILES = ("server.py", "access.py", "glagol.py", "assistant.py", "profiles.py", "multi.py", "speakers.example.json", "VERSION", "LICENSE", "README.md", "CONTRIBUTION.md", "start.bat", "start.sh", "start.command",
+    FILES = ("server.py", "access.py", "glagol.py", "assistant.py", "profiles.py", "multi.py", "discovery.py", "speakers.example.json", "VERSION", "LICENSE", "README.md", "CONTRIBUTION.md", "start.bat", "start.sh", "start.command",
              "Dockerfile", "docker-compose.yml")
     DIRS = ("static", "device", "3d", "tools", "docs")
 
@@ -2856,6 +2865,7 @@ def restart_self():
         Handler.panel.metrics._save()
     except Exception:  # noqa: BLE001
         pass
+    if getattr(Handler,'discovery',None):Handler.discovery.close()
     sys.stdout.flush()
     os.execv(sys.executable, [sys.executable] + args)
 
@@ -2923,14 +2933,9 @@ def main():
     if args.data_dir:
         set_data_dir(args.data_dir)
 
-    # Адрес колонки: из аргумента/окружения, иначе — запомненный, иначе спросим (если есть кому ответить).
+    # Without a saved target the web interface offers discovered speakers.
     settings = load_settings()
     device = normalize_device(args.device) or settings.get("device")
-    if not device and sys.stdin and sys.stdin.isatty():
-        try:
-            device = normalize_device(input("IP-адрес колонки (Enter — колонка по USB): "))
-        except EOFError:
-            device = None
     if device and device != settings.get("device"):
         save_settings({**settings, "device": device})
         settings = load_settings()
@@ -2940,7 +2945,7 @@ def main():
     model = (settings.get("model") if settings.get("model") in profiles.PROFILES else "lite2") if auto else args.model
     profiles.install(sys.modules[__name__], model, auto=auto)
 
-    adb = Adb(find_adb(), device)
+    adb = Adb(find_adb(), device or '__select_speaker__')
     panel = Panel(adb)
     panel.auth = glagol.YandexAuth(AUTH_FILE)
     host = device.rpartition(":")[0] if device and ":" in device else None
@@ -2958,10 +2963,17 @@ def main():
     Handler.access = access.PanelAccess(PANEL_AUTH_FILE)
     Handler.updater = PanelUpdater()
     Handler.ports = {"http": args.port}
+    handler_class = Handler
+    portal = None
+    if not os.environ.get('PANEL_GATEWAY_SECRET'):
+        sys.modules.setdefault('server',sys.modules[__name__])
+        import multi
+        handler_class,portal = multi.attach_discovery(Handler,device,model,DATA_DIR)
+        Handler.discovery = portal
     # после перезапуска (обновление) старый процесс может ещё держать порт — подождём
     for attempt in range(20):
         try:
-            srv = ThreadingHTTPServer((args.host, args.port), Handler)
+            srv = ThreadingHTTPServer((args.host, args.port), handler_class)
             break
         except OSError:
             if attempt == 19:
@@ -2969,12 +2981,13 @@ def main():
             time.sleep(0.5)
     args.port = srv.server_address[1]
     Handler.ports["http"] = args.port
+    if portal and 'current' in multi.DEVICES:multi.DEVICES['current']['port']=args.port
     ready = os.environ.get("PANEL_READY_FILE")
     if ready:
         Path(ready).write_text(json.dumps({"port": args.port}), encoding="utf8")
     shown = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
     print(f"Панель {VERSION} · профиль {model}{' (авто)' if auto else ''}")
-    print(f"adb: {adb.adb}  колонка: {device or 'по USB / единственное устройство adb'}  данные: {DATA_DIR}")
+    print(f"adb: {adb.adb}  колонка: {device or 'выберите в веб-панели'}  данные: {DATA_DIR}")
     print(f"Панель: http://{shown}:{args.port}/")
     if args.https_port:
         try:
@@ -2984,7 +2997,7 @@ def main():
             ctx.load_cert_chain(crt, key)
             for attempt in range(20):        # после перезапуска порт может быть ещё занят
                 try:
-                    tls = TLSServer((args.host, args.https_port), Handler, ctx)
+                    tls = TLSServer((args.host, args.https_port), handler_class, ctx)
                     break
                 except OSError:
                     if attempt == 19:
@@ -3007,6 +3020,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if portal:portal.close()
         panel.metrics._save()
 
 

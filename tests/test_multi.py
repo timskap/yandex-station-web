@@ -1,5 +1,6 @@
 """Routing/authentication/tunnel regression tests with isolated fake workers."""
 import http.client,json,socket,sys,tempfile,threading,unittest,subprocess
+from unittest import mock
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -59,6 +60,19 @@ class GatewayTests(unittest.TestCase):
                 self.assertEqual(status,200);value=json.loads(data);self.assertEqual(value['model'],model);self.assertEqual(value['path'],'/api/shell');self.assertEqual(value['body'],'read-only-test')
     def test_csrf_denied(self):
         self.assertEqual(self.request('/speaker/mini3pro/api/shell','POST',origin='https://untrusted.example',body='test')[0],403)
+
+    def test_discovery_stays_behind_shared_login(self):
+        portal=mock.Mock()
+        portal.request.return_value={'devices':[]}
+        with mock.patch.object(TestGateway,'discovery',portal):
+            self.assertEqual(self.request('/speaker/mini3pro/api/discovery',cookie=False)[0],401)
+            portal.request.assert_not_called()
+            self.assertEqual(self.request('/speaker/mini3pro/api/discovery')[0],200)
+            portal.request.assert_called_once_with('/api/discovery','GET',{})
+
+    def test_discovery_requires_json_and_rejects_null_origin(self):
+        for origin in (None,'null'):
+            self.assertEqual(self.request('/speaker/mini3pro/api/discovery/open','POST',origin=origin,body='{}')[0],415)
     def test_proxy_preserves_page_bytes_instead_of_rewriting_source(self):
         for model in gateway.DEVICES:
             status,data,_=self.request('/speaker/'+model+'/');self.assertEqual(status,200)

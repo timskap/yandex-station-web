@@ -7,11 +7,11 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o
 FROM python:3.14-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends adb ffmpeg openssl \
+ && apt-get install -y --no-install-recommends adb ffmpeg openssl iproute2 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY server.py access.py glagol.py assistant.py profiles.py multi.py speakers.example.json VERSION ./
+COPY server.py access.py glagol.py assistant.py profiles.py multi.py discovery.py speakers.example.json VERSION ./
 COPY static ./static
 COPY device ./device
 COPY --from=assistant-builder /station-assistant-linux-arm64 ./device/assistant/
