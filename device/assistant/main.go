@@ -50,6 +50,11 @@ type Daemon struct {
 	sources          []Source
 	searched         bool
 	firstAudioMS     int64
+	timing           *turnMetrics
+	recentTimings    []TurnTiming
+	client           *http.Client
+	clientVPN        bool
+	clientDNS        string
 	// Fixed in production; injectable in unit tests, never configurable over the UI.
 	endpoint string
 	play     func(context.Context, io.Reader) error
@@ -66,9 +71,11 @@ func (d *Daemon) status() map[string]any {
 	_, needsAuth, _ := sanitizeOVPN(d.cfg.VPNConfig)
 	return map[string]any{"installed": true, "running": true, "version": version,
 		"enabled": d.cfg.Enabled, "has_key": d.cfg.APIKey != "", "model": d.cfg.Model, "voice": d.cfg.Voice,
-		"prefix": d.cfg.Prefix, "instructions": d.cfg.Instructions, "busy": d.busy, "stage": d.stage,
+		"speech_model": d.cfg.SpeechModel,
+		"prefix":       d.cfg.Prefix, "instructions": d.cfg.Instructions, "busy": d.busy, "stage": d.stage,
 		"listening":  d.listening,
 		"web_search": d.cfg.WebSearch, "sources": d.sources, "searched": d.searched, "first_audio_ms": d.firstAudioMS,
+		"timing": d.timing.snapshot(), "recent_timings": append([]TurnTiming(nil), d.recentTimings...),
 		"error": d.err, "requests": d.requests, "last_voice": d.lastVoice.Unix(), "log_available": d.logOK,
 		"vpn_enabled": d.cfg.VPNEnabled, "vpn_configured": d.cfg.VPNConfig != "", "vpn_has_auth": d.cfg.VPNUser != "" && d.cfg.VPNPassword != "",
 		"vpn_needs_auth": needsAuth,
@@ -135,6 +142,7 @@ func (d *Daemon) update(data []byte, vpn bool) error {
 			Key          *string `json:"api_key"`
 			Model        string  `json:"model"`
 			Voice        string  `json:"voice"`
+			SpeechModel  string  `json:"speech_model"`
 			Prefix       string  `json:"prefix"`
 			Instructions string  `json:"instructions"`
 			WebSearch    *bool   `json:"web_search"`
@@ -159,6 +167,15 @@ func (d *Daemon) update(data []byte, vpn bool) error {
 		}
 		if p.Voice != "" {
 			c.Voice = p.Voice
+		}
+		if p.SpeechModel != "" {
+			c.SpeechModel = p.SpeechModel
+		}
+		if c.SpeechModel != "gpt-4o-mini-tts" && c.SpeechModel != "tts-1" {
+			return errors.New("Неизвестная модель озвучки")
+		}
+		if c.SpeechModel == "tts-1" && !strings.Contains("|alloy|ash|coral|echo|fable|onyx|nova|sage|shimmer|", "|"+c.Voice+"|") {
+			return errors.New("Для быстрой озвучки выберите голос Coral, Alloy, Nova, Onyx или Sage")
 		}
 		if p.Prefix != "" {
 			c.Prefix = normalize(p.Prefix)
@@ -187,6 +204,7 @@ func (d *Daemon) update(data []byte, vpn bool) error {
 		return errors.New("Не удалось сохранить настройки на колонке")
 	}
 	d.stop()
+	d.closeClient()
 	d.mu.Lock()
 	d.cfg = c
 	d.history = nil
@@ -396,11 +414,34 @@ func clientFor(c Config) *http.Client {
 			return dns.DialContext(ctx, transport, net.JoinHostPort(c.VPNDNS, "53"))
 		}}
 	}
-	tr := &http.Transport{TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: 50 * time.Second, DisableKeepAlives: true,
+	tr := &http.Transport{TLSHandshakeTimeout: 15 * time.Second, ResponseHeaderTimeout: 50 * time.Second,
+		MaxIdleConns: 4, MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second, ForceAttemptHTTP2: true,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			return dialer.DialContext(ctx, "tcp4", address)
 		}}
-	return &http.Client{Transport: tr, Timeout: 65 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return errors.New("redirect rejected") }}
+	return &http.Client{Transport: tr, Timeout: 150 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return errors.New("redirect rejected") }}
+}
+
+func (d *Daemon) clientFor(c Config) *http.Client {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.client == nil || d.clientVPN != c.VPNEnabled || d.clientDNS != c.VPNDNS {
+		if d.client != nil {
+			d.client.CloseIdleConnections()
+		}
+		d.client = clientFor(c)
+		d.clientVPN, d.clientDNS = c.VPNEnabled, c.VPNDNS
+	}
+	return d.client
+}
+
+func (d *Daemon) closeClient() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.client != nil {
+		d.client.CloseIdleConnections()
+		d.client = nil
+	}
 }
 
 func (d *Daemon) withResponse(ctx context.Context, c Config, path string, payload any, consume func(io.Reader) error) error {
@@ -417,12 +458,8 @@ func (d *Daemon) withResponse(ctx context.Context, c Config, path string, payloa
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	client := clientFor(c)
-	// Streaming playback applies backpressure at speaking speed, not download speed.
-	if path == "/audio/speech" {
-		client.Timeout = 150 * time.Second
-	}
-	defer client.CloseIdleConnections()
+	client := d.clientFor(c)
+	req = traceRequest(req, path)
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -544,6 +581,9 @@ func (d *Daemon) askWithMode(text string, voice bool) error {
 	d.searched = false
 	d.firstAudioMS = 0
 	started := time.Now()
+	d.timing = &turnMetrics{started: started, value: TurnTiming{StartedAt: started.UnixMilli(), Model: c.Model, SpeechModel: c.SpeechModel}}
+	metrics := d.timing
+	ctx = context.WithValue(ctx, timingKey{}, metrics)
 	if time.Since(d.lastAnswer) > 10*time.Minute {
 		d.history = nil
 	}
@@ -557,6 +597,7 @@ func (d *Daemon) askWithMode(text string, voice bool) error {
 		var failure error
 		defer func() {
 			cancel()
+			d.saveTiming(metrics, failure)
 			d.mu.Lock()
 			d.busy = false
 			d.cancel = nil
@@ -573,6 +614,7 @@ func (d *Daemon) askWithMode(text string, voice bool) error {
 		defer func() { <-quietDone }()
 		payload := responsePayload(c, input)
 		b, err := d.post(ctx, c, "/responses", payload, 512*1024)
+		metrics.update(func(t *TurnTiming) { t.TextMS = time.Since(started).Milliseconds() })
 		if err != nil {
 			failure = err
 			return
@@ -587,15 +629,24 @@ func (d *Daemon) askWithMode(text string, voice bool) error {
 		d.sources = sources
 		d.searched = searched
 		d.mu.Unlock()
+		metrics.update(func(t *TurnTiming) { t.Searched = searched; t.AnswerChars = len([]rune(answer)) })
 		<-quietDone
 		d.setStage("speech")
-		err = d.withResponse(ctx, c, "/audio/speech", speechPayload(c.Voice, speechText(answer)), func(r io.Reader) error {
+		speechStarted := time.Now()
+		spoken := speechPayload(c.Voice, speechText(answer))
+		spoken["model"] = c.SpeechModel
+		err = d.withResponse(ctx, c, "/audio/speech", spoken, func(r io.Reader) error {
 			pcm := &pcmStream{reader: r, limit: 6 * 1024 * 1024, first: func() {
 				d.mu.Lock()
 				d.stage = "playing"
 				d.firstAudioMS = time.Since(started).Milliseconds()
 				d.mu.Unlock()
+				metrics.update(func(t *TurnTiming) {
+					t.FirstAudioMS = time.Since(started).Milliseconds()
+					t.SpeechMS = time.Since(speechStarted).Milliseconds()
+				})
 			}}
+			defer func() { metrics.update(func(t *TurnTiming) { t.AudioBytes = pcm.count }) }()
 			if err := d.play(ctx, pcm); err != nil {
 				return err
 			}
@@ -819,6 +870,8 @@ func serve(dir string) error {
 		return err
 	}
 	d := &Daemon{dir: dir, cfg: c, vpn: &VPN{dir: dir, state: "off"}, endpoint: "https://api.openai.com/v1", play: playPCM, quiet: quietAlice, listen: listenAlice, stage: "idle"}
+	d.loadTimings()
+	defer d.closeClient()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	srv := &http.Server{Handler: d.handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second}

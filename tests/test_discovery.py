@@ -94,9 +94,19 @@ class ScannerTests(unittest.TestCase):
             while self.scanner.snapshot()['scanning'] and time.monotonic()<deadline:time.sleep(.01)
             self.assertEqual(probe.call_count,1)
 
+    def test_registered_adb_transport_is_not_replaced_by_raw_probe(self):
+        self.scanner.adb='fixture-adb'
+        self.scanner.configure({'networks':['192.168.1.10/32'],'ports':[5555]})
+        with mock.patch.object(discovery,'run',return_value='List of devices attached\n192.168.1.10:5555\tdevice\n'),mock.patch.object(discovery,'probe_connected',return_value=None) as connected,mock.patch.object(discovery,'probe') as raw:
+            self.scanner._scan()
+            connected.assert_called_once_with('fixture-adb','192.168.1.10',5555)
+            raw.assert_not_called()
+
 
 class PortalTests(unittest.TestCase):
     def setUp(self):
+        finder=mock.patch.object(multi.server,'find_adb',return_value=None)
+        finder.start();self.addCleanup(finder.stop)
         self.old=dict(multi.DEVICES);multi.DEVICES.clear()
         self.addCleanup(lambda:(multi.DEVICES.clear(),multi.DEVICES.update(self.old)))
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)

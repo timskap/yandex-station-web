@@ -130,21 +130,29 @@ def probe(host, port):
                     sock.sendall(packet(b'OKAY',1,remote))
                 elif command==b'CLSE': break
                 elif command!=b'OKAY': return None
-            text=output.decode('utf8','replace')
-            if '\nPANEL_STATION\n' not in text.replace('\r',''): return None
-            lines=[s.strip() for s in text.replace('\r','').split('\nPANEL_STATION\n',1)[1].splitlines() if s.strip()]
-            platform=next((s for s in lines if re.fullmatch(r'[a-zA-Z0-9_-]+',s)), '')
-            mac=next((s for s in lines if re.fullmatch(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}',s)), '')
-            from profiles import PROFILES
-            model=next((key for key,p in PROFILES.items() if p['platform']==platform),'lite2')
-            name='Станция Лайт' if platform=='yandexmicro' else PROFILES[model]['name'] if platform in {p['platform'] for p in PROFILES.values()} else 'Яндекс Станция'
-            address=f'{host}:{port}'
-            identifier='s-'+hashlib.sha256((mac.lower() or address).encode()).hexdigest()[:12]
-            return {'id':identifier,'address':address,'name':name,'model':model,'platform':platform,'available':True,'last_seen':time.time()}
+            return identified(host, port, output.decode('utf8','replace'))
     except (OSError, ValueError, struct.error): return None
 
+def identified(host, port, text):
+    if '\nPANEL_STATION\n' not in text.replace('\r',''): return None
+    lines=[s.strip() for s in text.replace('\r','').split('\nPANEL_STATION\n',1)[1].splitlines() if s.strip()]
+    platform=next((s for s in lines if re.fullmatch(r'[a-zA-Z0-9_-]+',s)), '')
+    mac=next((s for s in lines if re.fullmatch(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}',s)), '')
+    from profiles import PROFILES
+    model=next((key for key,p in PROFILES.items() if p['platform']==platform),'lite2')
+    name='Станция Лайт' if platform=='yandexmicro' else PROFILES[model]['name'] if platform in {p['platform'] for p in PROFILES.values()} else 'Яндекс Станция'
+    address=f'{host}:{port}'
+    identifier='s-'+hashlib.sha256((mac.lower() or address).encode()).hexdigest()[:12]
+    return {'id':identifier,'address':address,'name':name,'model':model,'platform':platform,'available':True,'last_seen':time.time()}
+
+def probe_connected(adb, host, port):
+    # Older adbd accepts only one transport: a raw CNXN can interrupt file pushes.
+    # Multiplex through the existing adb server instead of replacing its connection.
+    return identified(host, port, run([adb, '-s', f'{host}:{port}', 'shell', IDENTIFY]))
+
 class Scanner:
-    def __init__(self, path, known=()):
+    def __init__(self, path, known=(), adb=None):
+        self.adb=adb
         self.path=Path(path);self.known=list(known);self.lock=threading.RLock();self.stop_event=threading.Event()
         self.devices={};self.scanning=False;self.checked=0;self.total=0;self.updated=0;self.error=''
         self.networks=[];self.ports=list(dict.fromkeys([5555]+[ep[1] for a in self.known if (ep:=endpoint(a))]))[:4];self.auto=True
@@ -199,8 +207,9 @@ class Scanner:
             with self.lock:self.active_networks=networks;self.total=len(targets)
             if not targets:raise ValueError('Не удалось определить локальную сеть. Укажите сеть в параметрах поиска.')
             found={}
+            registered={ep for line in run([self.adb,'devices']).splitlines() if line.strip() and (ep:=endpoint(line.split()[0]))} if self.adb else set()
             with concurrent.futures.ThreadPoolExecutor(max_workers=32) as pool:
-                futures={pool.submit(probe,*ep) for ep in targets}
+                futures={pool.submit(probe_connected,self.adb,*ep) if ep in registered else pool.submit(probe,*ep) for ep in targets}
                 for future in concurrent.futures.as_completed(futures):
                     if self.stop_event.is_set():
                         for pending in futures:pending.cancel()

@@ -247,7 +247,7 @@ class DiscoveryPortal:
                 if key not in DEVICES and len(DEVICES)<32:
                     DEVICES[key]=spec;workers.config[key]=spec
         except (OSError,ValueError):pass
-        self.scanner=discovery.Scanner(Path(data_dir)/'data/discovery/settings.json',known=[s.get('device') for s in DEVICES.values()])
+        self.scanner=discovery.Scanner(Path(data_dir)/'data/discovery/settings.json',known=[s.get('device') for s in DEVICES.values()],adb=server.find_adb())
         threading.Thread(target=self.scanner.run,daemon=True,name='discovery-schedule').start()
 
     def ensure_worker(self,identifier):

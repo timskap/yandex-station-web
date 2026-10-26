@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const version = "0.2.1"
+const version = "0.2.2"
 const defaultDir = "/data/quasar/webpanel/assistant"
 const maindLog = "/data/quasar/daemons_logs/maind.log"
 
@@ -18,6 +18,7 @@ type Config struct {
 	APIKey       string `json:"api_key"`
 	Model        string `json:"model"`
 	Voice        string `json:"voice"`
+	SpeechModel  string `json:"speech_model"`
 	Prefix       string `json:"prefix"`
 	Instructions string `json:"instructions"`
 	WebSearch    bool   `json:"web_search"`
@@ -29,7 +30,7 @@ type Config struct {
 }
 
 func defaults() Config {
-	return Config{Model: "gpt-6-luna", Voice: "coral", Prefix: "спроси gpt", VPNDNS: "1.1.1.1",
+	return Config{Model: "gpt-6-luna", Voice: "coral", SpeechModel: "gpt-4o-mini-tts", Prefix: "спроси gpt", VPNDNS: "1.1.1.1",
 		Instructions: "Отвечай по-русски кратко, обычно двумя-тремя предложениями. Ответ будет озвучен: без Markdown. Ты голосовой помощник на базе OpenAI."}
 }
 

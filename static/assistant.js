@@ -21,7 +21,12 @@
     $('#ai-error').textContent = s.error || '';
     $('#ai-voice-hint').hidden = !ready || !s.has_key || !!s.enabled;
     $('#ai-key-state').textContent = s.has_key ? 'Ключ сохранён на колонке' : 'Ключ не задан';
-    $('#ai-speed').textContent = s.first_audio_ms ? `Первое аудио последнего ответа: ${(s.first_audio_ms / 1000).toFixed(1)} с после распознавания вопроса` : '';
+    const timing = s.timing?.started_at ? s.timing : s.recent_timings?.at(-1) || s.timing;
+    const firstAudio = s.first_audio_ms || (!s.busy && timing?.first_audio_ms);
+    $('#ai-speed').textContent = firstAudio ? `Первое аудио последнего ответа: ${(firstAudio / 1000).toFixed(1)} с после распознавания вопроса` : '';
+    if (firstAudio && timing?.text_ms) {
+      $('#ai-speed').textContent += ` · текст: ${(timing.text_ms / 1000).toFixed(1)} с · ожидание голоса: ${(timing.speech_ms / 1000).toFixed(1)} с${timing.searched ? ' · с поиском в интернете' : ''}`;
+    }
     $('#ai-sources-row').hidden = !s.searched;
     const sources = $('#ai-sources');
     sources.replaceChildren();
@@ -56,6 +61,7 @@
       $('#ai-prefix').value = s.prefix;
       $('#ai-instructions').value = s.instructions;
       $('#ai-voice').value = s.voice;
+      $('#ai-speech-model').value = s.speech_model || 'gpt-4o-mini-tts';
       $('#ai-web-search').checked = !!s.web_search;
     }
     if ((fill === true || fill === 'vpn') && ready) {
@@ -114,7 +120,7 @@
   $('#ai-form').onsubmit = e => {
     e.preventDefault();
     const data = {enabled:$('#ai-enabled').checked, model:$('#ai-model').value.trim(), voice:$('#ai-voice').value,
-      prefix:$('#ai-prefix').value.trim(), instructions:$('#ai-instructions').value.trim(), web_search:$('#ai-web-search').checked};
+      speech_model:$('#ai-speech-model').value, prefix:$('#ai-prefix').value.trim(), instructions:$('#ai-instructions').value.trim(), web_search:$('#ai-web-search').checked};
     if ($('#ai-key').value.trim()) data.api_key = $('#ai-key').value.trim();
     command(e.submitter, 'config', data, 'Настройки OpenAI сохранены', () => { $('#ai-key').value = ''; });
   };
