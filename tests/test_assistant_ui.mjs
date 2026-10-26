@@ -62,4 +62,13 @@ state = {...state, vpn_connected:true, vpn_state:'connected'};
 await window.loadAssistant();
 assert.equal($('#ai-vpn-result').textContent, 'Профиль сохранён. VPN подключён.');
 
-console.log('VPN form: persistent errors, preserved input, saved state and explicit connection passed');
+state = {...state, has_key:true, enabled:false};
+await window.loadAssistant();
+assert.equal($('#ai-voice-hint').hidden, false, 'A working test must not imply voice activation is enabled');
+state = {...state, enabled:true, listening:true};
+await window.loadAssistant();
+assert.equal($('#ai-voice-hint').hidden, true);
+assert.equal($('#ai-state').textContent, 'Слушаю вопрос…');
+assert.equal($('#ai-example').textContent, '«Алиса, спроси gpt»');
+
+console.log('Assistant UI: VPN save/connection, disabled voice hint and listening state passed');

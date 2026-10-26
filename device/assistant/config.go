@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const version = "0.1.0"
+const version = "0.1.1"
 const defaultDir = "/data/quasar/webpanel/assistant"
 const maindLog = "/data/quasar/daemons_logs/maind.log"
 
@@ -76,6 +76,23 @@ func saveConfig(dir string, c Config) error {
 var modelID = regexp.MustCompile(`^[a-zA-Z0-9._:-]{1,100}$`)
 var phrases = regexp.MustCompile(`onAliceStateChanged: BUSY, recognizedPhrase='(.*)'`)
 
+func voicePrefixes(prefix string) []string {
+	prefix = normalize(prefix)
+	// The setting and the ASR result can spell the same spoken name differently.
+	// Expand both sides, but only for the explicit GPT trigger family.
+	var gpt []string
+	for _, name := range []string{"gpt", "гпт", "джипити", "джипи ти", "джи пи ти", "джи пити",
+		"чат gpt", "чат гпт", "чатгпт", "chatgpt", "чат джипити", "чатджипити", "чат джи пи ти"} {
+		gpt = append(gpt, "спроси "+name)
+	}
+	for _, candidate := range gpt {
+		if prefix == candidate {
+			return gpt
+		}
+	}
+	return []string{prefix}
+}
+
 // Only final ASR events are eligible. LISTENING contains partial hypotheses.
 func voiceQuery(line, prefix string) (string, bool) {
 	m := phrases.FindStringSubmatch(line)
@@ -83,12 +100,7 @@ func voiceQuery(line, prefix string) (string, bool) {
 		return "", false
 	}
 	phrase := strings.TrimSpace(m[1])
-	prefix = normalize(prefix)
-	variants := []string{prefix}
-	if prefix == "спроси gpt" {
-		variants = append(variants, "спроси джипити", "спроси джи пи ти", "спроси джипи ти", "спроси чат gpt", "спроси чат джипити")
-	}
-	for _, p := range variants {
+	for _, p := range voicePrefixes(prefix) {
 		words := strings.Fields(p)
 		for i, w := range words {
 			words[i] = regexp.QuoteMeta(w)

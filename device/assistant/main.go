@@ -24,25 +24,34 @@ type turn struct {
 	Content string `json:"content"`
 }
 type Daemon struct {
-	dir        string
-	mu         sync.Mutex
-	cfg        Config
-	vpn        *VPN
-	busy       bool
-	changing   bool
-	cancel     context.CancelFunc
-	done       chan struct{}
-	err        string
-	stage      string
-	requests   int
-	lastVoice  time.Time
-	lastAnswer time.Time
-	history    []turn
-	logOK      bool
+	dir              string
+	mu               sync.Mutex
+	cfg              Config
+	vpn              *VPN
+	busy             bool
+	changing         bool
+	cancel           context.CancelFunc
+	done             chan struct{}
+	err              string
+	stage            string
+	requests         int
+	lastVoice        time.Time
+	lastAnswer       time.Time
+	history          []turn
+	logOK            bool
+	listening        bool
+	listenStarted    bool
+	listenReady      bool
+	listenUntil      time.Time
+	listenCancel     context.CancelFunc
+	listenGeneration uint64
+	lastVoiceQuery   string
+	lastVoiceQueryAt time.Time
 	// Fixed in production; injectable in unit tests, never configurable over the UI.
 	endpoint string
 	play     func(context.Context, []byte) error
 	quiet    func(context.Context)
+	listen   func(context.Context, func()) error
 }
 
 func (d *Daemon) status() map[string]any {
@@ -55,7 +64,8 @@ func (d *Daemon) status() map[string]any {
 	return map[string]any{"installed": true, "running": true, "version": version,
 		"enabled": d.cfg.Enabled, "has_key": d.cfg.APIKey != "", "model": d.cfg.Model, "voice": d.cfg.Voice,
 		"prefix": d.cfg.Prefix, "instructions": d.cfg.Instructions, "busy": d.busy, "stage": d.stage,
-		"error": d.err, "requests": d.requests, "last_voice": d.lastVoice.Unix(), "log_available": d.logOK,
+		"listening": d.listening,
+		"error":     d.err, "requests": d.requests, "last_voice": d.lastVoice.Unix(), "log_available": d.logOK,
 		"vpn_enabled": d.cfg.VPNEnabled, "vpn_configured": d.cfg.VPNConfig != "", "vpn_has_auth": d.cfg.VPNUser != "" && d.cfg.VPNPassword != "",
 		"vpn_needs_auth": needsAuth,
 		"vpn_installed":  vpnErr == nil && routingErr == nil, "vpn_connected": connected, "vpn_state": state, "vpn_message": msg, "vpn_dns": d.cfg.VPNDNS}
@@ -186,11 +196,167 @@ func (d *Daemon) update(data []byte, vpn bool) error {
 func (d *Daemon) stop() {
 	d.mu.Lock()
 	cancel, done := d.cancel, d.done
+	wasListening := d.listening
+	listenCancel := d.finishListeningLocked()
 	d.mu.Unlock()
+	if listenCancel != nil {
+		listenCancel()
+	}
 	if cancel != nil {
 		cancel()
 		<-done
 	}
+	if wasListening {
+		d.quiet(context.Background())
+	}
+}
+
+func (d *Daemon) finishListeningLocked() context.CancelFunc {
+	cancel := d.listenCancel
+	d.listenCancel = nil
+	d.listening = false
+	d.listenStarted = false
+	d.listenReady = false
+	d.listenGeneration++
+	if !d.busy {
+		d.stage = "idle"
+	}
+	return cancel
+}
+
+func (d *Daemon) beginListening() error {
+	d.stop()
+	d.mu.Lock()
+	if !d.cfg.Enabled || d.changing {
+		d.mu.Unlock()
+		return errors.New("Голосовой запуск выключен")
+	}
+	if d.cfg.APIKey == "" {
+		d.mu.Unlock()
+		return errors.New("API-ключ OpenAI не задан")
+	}
+	if d.cfg.VPNEnabled {
+		connected, _, _ := d.vpn.status()
+		if !connected {
+			d.mu.Unlock()
+			return errors.New("Сначала дождитесь подключения VPN")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	d.listening = true
+	d.listenStarted = false
+	d.listenReady = false
+	d.listenUntil = time.Now().Add(20 * time.Second)
+	d.listenCancel = cancel
+	d.listenGeneration++
+	generation := d.listenGeneration
+	d.stage = "listening"
+	d.err = ""
+	d.mu.Unlock()
+	go func() {
+		if err := d.listen(ctx, func() {
+			d.mu.Lock()
+			if d.listenGeneration == generation && d.listening && ctx.Err() == nil {
+				d.listenStarted = true
+			}
+			d.mu.Unlock()
+		}); err != nil {
+			d.mu.Lock()
+			if d.listenGeneration == generation && d.listening {
+				d.finishListeningLocked()
+				d.err = "Не удалось начать прослушивание вопроса"
+			}
+			d.mu.Unlock()
+			cancel()
+		}
+	}()
+	return nil
+}
+
+// Accept exactly one final ASR result from the conversation we just opened.
+// Partial hypotheses and unrelated speech outside that short window stay local.
+func (d *Daemon) handleVoice(line string) {
+	d.mu.Lock()
+	if !d.cfg.Enabled {
+		d.mu.Unlock()
+		return
+	}
+	prefix := d.cfg.Prefix
+	if d.listening && d.listenStarted && (strings.Contains(line, "onRequestStateChanged: LISTENING") || strings.Contains(line, "onAliceStateChanged: LISTENING")) {
+		d.listenReady = true
+	}
+	// Native recognition may finish before our maximum wait expires.
+	ended := d.listening && d.listenReady && strings.Contains(line, "onAliceStateChanged: IDLE")
+	deadline := d.listenUntil
+	d.mu.Unlock()
+	if ended {
+		d.expireListening(deadline)
+		return
+	}
+	m := phrases.FindStringSubmatch(line)
+	if len(m) != 2 || strings.TrimSpace(m[1]) == "" {
+		return
+	}
+	q, trigger := voiceQuery(line, prefix)
+	d.mu.Lock()
+	if !trigger {
+		if !d.listening || !d.listenReady || time.Now().After(d.listenUntil) {
+			d.mu.Unlock()
+			return
+		}
+		q = strings.TrimSpace(m[1])
+	}
+	if q == d.lastVoiceQuery && time.Since(d.lastVoiceQueryAt) < 8*time.Second {
+		d.mu.Unlock()
+		return
+	}
+	d.lastVoiceQuery = q
+	d.lastVoiceQueryAt = time.Now()
+	d.lastVoice = time.Now()
+	var cancel context.CancelFunc
+	if q != "" {
+		cancel = d.finishListeningLocked()
+	}
+	d.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	var err error
+	switch normalize(q) {
+	case "":
+		err = d.beginListening()
+	case "стоп", "остановись", "отмена", "не надо":
+		d.stop()
+		d.quiet(context.Background())
+	case "новый разговор":
+		d.stop()
+		d.mu.Lock()
+		d.history = nil
+		d.mu.Unlock()
+		d.quiet(context.Background())
+	default:
+		err = d.askWithMode(q, true)
+	}
+	if err != nil {
+		d.mu.Lock()
+		d.err = err.Error()
+		d.mu.Unlock()
+	}
+}
+
+func (d *Daemon) expireListening(now time.Time) {
+	d.mu.Lock()
+	if !d.listening || now.Before(d.listenUntil) {
+		d.mu.Unlock()
+		return
+	}
+	cancel := d.finishListeningLocked()
+	d.err = "Вопрос не прозвучал. Скажите фразу активации ещё раз и задайте вопрос после сигнала."
+	d.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	d.quiet(context.Background())
 }
 func (d *Daemon) setStage(s string) { d.mu.Lock(); d.stage = s; d.mu.Unlock() }
 
@@ -342,7 +508,11 @@ func (d *Daemon) askWithMode(text string, voice bool) error {
 		d.history = nil
 	}
 	input := append(append([]turn{}, d.history...), turn{"user", text})
+	listenCancel := d.finishListeningLocked()
 	d.mu.Unlock()
+	if listenCancel != nil {
+		listenCancel()
+	}
 	go func() {
 		var failure error
 		defer func() {
@@ -412,6 +582,14 @@ func playPCM(ctx context.Context, pcm []byte) error {
 }
 
 func quietAlice(ctx context.Context) {
+	_ = aliceCLI(ctx, []string{"c", "o"}, nil)
+}
+
+func listenAlice(ctx context.Context, starting func()) error {
+	return aliceCLI(ctx, []string{"c", "o", "s"}, starting)
+}
+
+func aliceCLI(ctx context.Context, commands []string, starting func()) error {
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/system/vendor/quasar/maind", "--cli")
@@ -420,23 +598,26 @@ func quietAlice(ctx context.Context) {
 	cmd.WaitDelay = time.Second
 	pipe, err := cmd.StdinPipe()
 	if err != nil {
-		return
+		return err
 	}
-	if cmd.Start() != nil {
-		return
+	if err = cmd.Start(); err != nil {
+		return err
 	}
 	go func() {
 		defer pipe.Close()
-		for _, part := range []string{"q\n", "стоп\n", "x\n"} {
+		for _, part := range append(commands, "x") {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(600 * time.Millisecond):
+			case <-time.After(350 * time.Millisecond):
 			}
-			_, _ = io.WriteString(pipe, part)
+			if part == "s" && starting != nil {
+				starting()
+			}
+			_, _ = io.WriteString(pipe, part+"\n")
 		}
 	}()
-	_ = cmd.Wait()
+	return cmd.Wait()
 }
 
 // Start at EOF so a restart never resends old conversations. Follow both rename
@@ -452,8 +633,6 @@ func (d *Daemon) watch(ctx context.Context, path string) {
 		}
 	}()
 	first := true
-	last := ""
-	var lastAt time.Time
 	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -462,6 +641,7 @@ func (d *Daemon) watch(ctx context.Context, path string) {
 			return
 		case <-ticker.C:
 		}
+		d.expireListening(time.Now())
 		st, err := os.Stat(path)
 		d.mu.Lock()
 		d.logOK = err == nil
@@ -500,40 +680,7 @@ func (d *Daemon) watch(ctx context.Context, path string) {
 			pending = ""
 		}
 		for _, line := range lines[:len(lines)-1] {
-			d.mu.Lock()
-			c := d.cfg
-			d.mu.Unlock()
-			if !c.Enabled {
-				continue
-			}
-			q, ok := voiceQuery(line, c.Prefix)
-			if !ok {
-				continue
-			}
-			if q == last && time.Since(lastAt) < 8*time.Second {
-				continue
-			}
-			last = q
-			lastAt = time.Now()
-			d.mu.Lock()
-			d.lastVoice = time.Now()
-			d.mu.Unlock()
-			if normalize(q) == "стоп" || normalize(q) == "остановись" {
-				d.stop()
-				continue
-			}
-			if normalize(q) == "новый разговор" {
-				d.stop()
-				d.mu.Lock()
-				d.history = nil
-				d.mu.Unlock()
-				continue
-			}
-			if err := d.askWithMode(q, true); err != nil {
-				d.mu.Lock()
-				d.err = err.Error()
-				d.mu.Unlock()
-			}
+			d.handleVoice(line)
 		}
 	}
 }
@@ -603,7 +750,7 @@ func serve(dir string) error {
 	if err = os.Chmod(sock, 0600); err != nil {
 		return err
 	}
-	d := &Daemon{dir: dir, cfg: c, vpn: &VPN{dir: dir, state: "off"}, endpoint: "https://api.openai.com/v1", play: playPCM, quiet: quietAlice, stage: "idle"}
+	d := &Daemon{dir: dir, cfg: c, vpn: &VPN{dir: dir, state: "off"}, endpoint: "https://api.openai.com/v1", play: playPCM, quiet: quietAlice, listen: listenAlice, stage: "idle"}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	srv := &http.Server{Handler: d.handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second}

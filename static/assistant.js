@@ -6,6 +6,7 @@
     state = s;
     const ready = !!s.running;
     $('#ai-state').textContent = !s.installed ? 'Сервис ещё не установлен' : !ready ? 'Сервис остановлен' :
+      s.listening ? 'Слушаю вопрос…' :
       s.busy ? ({thinking:'OpenAI готовит ответ…', speech:'Создаётся голос…', playing:'Колонка отвечает…'}[s.stage] || 'Обрабатываем вопрос…') :
       s.enabled ? 'Готов к голосовым вопросам' : 'Сервис запущен · голосовой запуск выключен';
     $('#ai-detail').textContent = ready ? `Версия ${s.version} · ${s.log_available ? 'распознавание доступно' : 'журнал распознавания пока недоступен'} · запросов: ${s.requests}` : 'ARM64 · автозапуск после включения колонки';
@@ -18,6 +19,7 @@
     $('#vpn-prepare-row').hidden = ready;
     $('#ai-error').hidden = !s.error;
     $('#ai-error').textContent = s.error || '';
+    $('#ai-voice-hint').hidden = !ready || !s.has_key || !!s.enabled;
     $('#ai-key-state').textContent = s.has_key ? 'Ключ сохранён на колонке' : 'Ключ не задан';
     $('#ai-vpn-file-state').textContent = s.vpn_configured ? `Профиль сохранён${s.vpn_has_auth ? ', логин и пароль заданы' : ''}` : 'Не загружена';
     $('#ai-vpn-state').textContent = s.vpn_enabled ? (s.vpn_message || 'Подключаемся…') : 'VPN выключен';
@@ -33,7 +35,7 @@
       s.vpn_enabled ? (s.vpn_state === 'error' ? s.vpn_message : 'Профиль сохранён. Дождитесь подключения — статус обновится автоматически.') :
       s.vpn_needs_auth && !s.vpn_has_auth ? 'Профиль сохранён на колонке. Заполните логин и пароль подключения из кабинета Red Shield, затем нажмите «Подключить VPN».' :
       'Профиль сохранён на колонке. Нажмите «Подключить VPN», чтобы включить соединение.';
-    $('#ai-example').textContent = `«Алиса, ${s.prefix || 'спроси GPT'}, почему небо голубое?»`;
+    $('#ai-example').textContent = `«Алиса, ${s.prefix || 'спроси GPT'}»`;
     if ((fill === true || fill === 'openai') && ready) {
       $('#ai-enabled').checked = !!s.enabled;
       $('#ai-model').value = s.model;

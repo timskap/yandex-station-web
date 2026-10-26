@@ -95,12 +95,34 @@ func TestFinalVoiceOnlyAndPreservedQuestion(t *testing.T) {
 	}
 }
 
+func TestGPTSpellingsWorkForCyrillicAndLatinSetting(t *testing.T) {
+	for _, prefix := range []string{"спроси гпт", "спроси GPT", "спроси джи-пи-ти", "спроси чатгпт"} {
+		for _, spoken := range []string{"Спроси GPT", "Спроси гпт", "Спроси джи пи ти", "Спроси чат GPT", "Спроси ChatGPT"} {
+			line := "onAliceStateChanged: BUSY, recognizedPhrase='" + spoken + ", Сколько будет 3.14 * 2?'"
+			q, ok := voiceQuery(line, prefix)
+			if !ok || q != "Сколько будет 3.14 * 2?" {
+				t.Fatalf("setting %q, ASR %q did not match", prefix, spoken)
+			}
+		}
+	}
+	for _, spoken := range []string{"Спроси GPTfoo вопрос", "Спроси врача вопрос", "Спроси другого помощника вопрос"} {
+		if _, ok := voiceQuery("onAliceStateChanged: BUSY, recognizedPhrase='"+spoken+"'", "спроси гпт"); ok {
+			t.Fatal("unrelated phrase accepted")
+		}
+	}
+	if _, ok := voiceQuery("onAliceStateChanged: BUSY, recognizedPhrase='Спроси GPT вопрос'", "спроси робота"); ok {
+		t.Fatal("custom prefix was overridden")
+	}
+}
+
 func testDaemon(t *testing.T, endpoint string) *Daemon {
 	t.Helper()
 	c := defaults()
 	c.APIKey = "test-secret-DO-NOT-PRINT"
 	c.Enabled = true
-	return &Daemon{dir: t.TempDir(), cfg: c, vpn: &VPN{}, endpoint: endpoint, quiet: func(context.Context) {}, play: func(context.Context, []byte) error { return nil }}
+	return &Daemon{dir: t.TempDir(), cfg: c, vpn: &VPN{}, endpoint: endpoint, quiet: func(context.Context) {},
+		listen: func(_ context.Context, starting func()) error { starting(); return nil },
+		play:   func(context.Context, []byte) error { return nil }}
 }
 
 func waitDone(t *testing.T, d *Daemon) {
