@@ -47,11 +47,14 @@ type Daemon struct {
 	listenGeneration uint64
 	lastVoiceQuery   string
 	lastVoiceQueryAt time.Time
+	sources          []Source
+	searched         bool
+	firstAudioMS     int64
 	// Fixed in production; injectable in unit tests, never configurable over the UI.
 	endpoint string
-	play     func(context.Context, []byte) error
+	play     func(context.Context, io.Reader) error
 	quiet    func(context.Context)
-	listen   func(context.Context, func()) error
+	listen   func(context.Context, func() error, func()) error
 }
 
 func (d *Daemon) status() map[string]any {
@@ -64,8 +67,9 @@ func (d *Daemon) status() map[string]any {
 	return map[string]any{"installed": true, "running": true, "version": version,
 		"enabled": d.cfg.Enabled, "has_key": d.cfg.APIKey != "", "model": d.cfg.Model, "voice": d.cfg.Voice,
 		"prefix": d.cfg.Prefix, "instructions": d.cfg.Instructions, "busy": d.busy, "stage": d.stage,
-		"listening": d.listening,
-		"error":     d.err, "requests": d.requests, "last_voice": d.lastVoice.Unix(), "log_available": d.logOK,
+		"listening":  d.listening,
+		"web_search": d.cfg.WebSearch, "sources": d.sources, "searched": d.searched, "first_audio_ms": d.firstAudioMS,
+		"error": d.err, "requests": d.requests, "last_voice": d.lastVoice.Unix(), "log_available": d.logOK,
 		"vpn_enabled": d.cfg.VPNEnabled, "vpn_configured": d.cfg.VPNConfig != "", "vpn_has_auth": d.cfg.VPNUser != "" && d.cfg.VPNPassword != "",
 		"vpn_needs_auth": needsAuth,
 		"vpn_installed":  vpnErr == nil && routingErr == nil, "vpn_connected": connected, "vpn_state": state, "vpn_message": msg, "vpn_dns": d.cfg.VPNDNS}
@@ -133,12 +137,16 @@ func (d *Daemon) update(data []byte, vpn bool) error {
 			Voice        string  `json:"voice"`
 			Prefix       string  `json:"prefix"`
 			Instructions string  `json:"instructions"`
+			WebSearch    *bool   `json:"web_search"`
 			ClearKey     bool    `json:"clear_key"`
 		}
 		if json.Unmarshal(data, &p) != nil {
 			return errors.New("Некорректные настройки OpenAI")
 		}
 		c.Enabled = p.Enabled
+		if p.WebSearch != nil {
+			c.WebSearch = *p.WebSearch
+		}
 		if p.Key != nil && *p.Key != "" {
 			c.APIKey = strings.TrimSpace(*p.Key)
 		}
@@ -182,6 +190,8 @@ func (d *Daemon) update(data []byte, vpn bool) error {
 	d.mu.Lock()
 	d.cfg = c
 	d.history = nil
+	d.sources = nil
+	d.searched = false
 	d.err = ""
 	d.mu.Unlock()
 	if vpn {
@@ -242,29 +252,42 @@ func (d *Daemon) beginListening() error {
 			return errors.New("Сначала дождитесь подключения VPN")
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	c := d.cfg
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	d.listening = true
 	d.listenStarted = false
 	d.listenReady = false
-	d.listenUntil = time.Now().Add(20 * time.Second)
+	d.listenUntil = time.Now().Add(90 * time.Second)
 	d.listenCancel = cancel
 	d.listenGeneration++
 	generation := d.listenGeneration
-	d.stage = "listening"
+	d.stage = "greeting"
 	d.err = ""
 	d.mu.Unlock()
 	go func() {
-		if err := d.listen(ctx, func() {
-			d.mu.Lock()
-			if d.listenGeneration == generation && d.listening && ctx.Err() == nil {
-				d.listenStarted = true
-			}
-			d.mu.Unlock()
-		}); err != nil {
+		// A new voice needs one download. Later activations use the local PCM file.
+		if _, err := os.Stat(greetingPath(d.dir, c.Voice)); err != nil {
+			d.quiet(ctx)
+		}
+		pcm, err := d.greetingAudio(ctx, c)
+		if err == nil {
+			err = d.listen(ctx, func() error {
+				return d.play(ctx, bytes.NewReader(pcm))
+			}, func() {
+				d.mu.Lock()
+				if d.listenGeneration == generation && d.listening && ctx.Err() == nil {
+					d.listenStarted = true
+					d.listenUntil = time.Now().Add(20 * time.Second)
+					d.stage = "listening"
+				}
+				d.mu.Unlock()
+			})
+		}
+		if err != nil {
 			d.mu.Lock()
 			if d.listenGeneration == generation && d.listening {
 				d.finishListeningLocked()
-				d.err = "Не удалось начать прослушивание вопроса"
+				d.err = "Не удалось подготовить голосовой запуск: " + err.Error()
 			}
 			d.mu.Unlock()
 			cancel()
@@ -351,7 +374,7 @@ func (d *Daemon) expireListening(now time.Time) {
 		return
 	}
 	cancel := d.finishListeningLocked()
-	d.err = "Вопрос не прозвучал. Скажите фразу активации ещё раз и задайте вопрос после сигнала."
+	d.err = "Вопрос не прозвучал. Скажите фразу активации ещё раз и задайте вопрос после «Ага, слушаю»."
 	d.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -380,51 +403,64 @@ func clientFor(c Config) *http.Client {
 	return &http.Client{Transport: tr, Timeout: 65 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return errors.New("redirect rejected") }}
 }
 
-func (d *Daemon) post(ctx context.Context, c Config, path string, payload any, limit int64) ([]byte, error) {
+func (d *Daemon) withResponse(ctx context.Context, c Config, path string, payload any, consume func(io.Reader) error) error {
 	if c.VPNEnabled {
 		connected, _, _ := d.vpn.status()
 		if !connected {
-			return nil, errors.New("VPN не подключён; запрос OpenAI не отправлен")
+			return errors.New("VPN не подключён; запрос OpenAI не отправлен")
 		}
 	}
 	data, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, "POST", d.endpoint+path, bytes.NewReader(data))
 	if err != nil {
-		return nil, errors.New("Ошибка запроса OpenAI")
+		return errors.New("Ошибка запроса OpenAI")
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	client := clientFor(c)
+	// Streaming playback applies backpressure at speaking speed, not download speed.
+	if path == "/audio/speech" {
+		client.Timeout = 150 * time.Second
+	}
 	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
-		return nil, errors.New("Нет ответа от OpenAI: проверьте интернет и VPN")
+		return errors.New("Нет ответа от OpenAI: проверьте интернет и VPN")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		// Provider responses can echo credentials or user text. Never return their body.
 		switch resp.StatusCode {
 		case 401:
-			return nil, errors.New("OpenAI отклонил API-ключ")
+			return errors.New("OpenAI отклонил API-ключ")
 		case 403:
-			return nil, errors.New("OpenAI отказал в доступе: проверьте проект, модель и VPN")
+			return errors.New("OpenAI отказал в доступе: проверьте проект, модель и VPN")
 		case 429:
-			return nil, errors.New("Лимит OpenAI: проверьте баланс API и частоту запросов")
+			return errors.New("Лимит OpenAI: проверьте баланс API и частоту запросов")
 		default:
-			return nil, fmt.Errorf("OpenAI: HTTP %d; проверьте модель и доступ проекта", resp.StatusCode)
+			return fmt.Errorf("OpenAI: HTTP %d; проверьте модель и доступ проекта", resp.StatusCode)
 		}
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil {
-		return nil, errors.New("Ответ OpenAI прерван")
-	}
-	if int64(len(b)) > limit {
-		return nil, errors.New("Ответ OpenAI слишком большой")
-	}
-	return b, nil
+	return consume(resp.Body)
+}
+
+func (d *Daemon) post(ctx context.Context, c Config, path string, payload any, limit int64) ([]byte, error) {
+	var b []byte
+	err := d.withResponse(ctx, c, path, payload, func(r io.Reader) error {
+		var err error
+		b, err = io.ReadAll(io.LimitReader(r, limit+1))
+		if err != nil {
+			return errors.New("Ответ OpenAI прерван")
+		}
+		if int64(len(b)) > limit {
+			return errors.New("Ответ OpenAI слишком большой")
+		}
+		return nil
+	})
+	return b, err
 }
 
 func responseText(b []byte) (string, error) {
@@ -504,6 +540,10 @@ func (d *Daemon) askWithMode(text string, voice bool) error {
 	d.err = ""
 	d.stage = "thinking"
 	d.requests++
+	d.sources = nil
+	d.searched = false
+	d.firstAudioMS = 0
+	started := time.Now()
 	if time.Since(d.lastAnswer) > 10*time.Minute {
 		d.history = nil
 	}
@@ -527,12 +567,11 @@ func (d *Daemon) askWithMode(text string, voice bool) error {
 			close(d.done)
 			d.mu.Unlock()
 		}()
-		// Stop Alice's own answer/music with its local CLI; microphone owner stays alive.
-		d.quiet(ctx)
-		payload := map[string]any{"model": c.Model, "instructions": c.Instructions, "input": input, "store": false, "max_output_tokens": 1024}
-		if strings.HasPrefix(c.Model, "gpt-5") || strings.HasPrefix(c.Model, "gpt-6") {
-			payload["reasoning"] = map[string]string{"effort": "low"}
-		}
+		// Cancel Alice while the text request runs; wait before playing our audio.
+		quietDone := make(chan struct{})
+		go func() { d.quiet(ctx); close(quietDone) }()
+		defer func() { <-quietDone }()
+		payload := responsePayload(c, input)
 		b, err := d.post(ctx, c, "/responses", payload, 512*1024)
 		if err != nil {
 			failure = err
@@ -543,22 +582,30 @@ func (d *Daemon) askWithMode(text string, voice bool) error {
 			failure = err
 			return
 		}
+		sources, searched := responseSources(b)
+		d.mu.Lock()
+		d.sources = sources
+		d.searched = searched
+		d.mu.Unlock()
+		<-quietDone
 		d.setStage("speech")
-		pcm, err := d.post(ctx, c, "/audio/speech", map[string]any{"model": "gpt-4o-mini-tts", "voice": c.Voice, "input": answer, "response_format": "pcm"}, 6*1024*1024)
+		err = d.withResponse(ctx, c, "/audio/speech", speechPayload(c.Voice, speechText(answer)), func(r io.Reader) error {
+			pcm := &pcmStream{reader: r, limit: 6 * 1024 * 1024, first: func() {
+				d.mu.Lock()
+				d.stage = "playing"
+				d.firstAudioMS = time.Since(started).Milliseconds()
+				d.mu.Unlock()
+			}}
+			if err := d.play(ctx, pcm); err != nil {
+				return err
+			}
+			return pcm.validate()
+		})
 		if err != nil {
-			failure = err
-			return
-		}
-		if len(pcm) == 0 || len(pcm)%2 != 0 {
-			failure = errors.New("OpenAI вернул некорректный звук")
-			return
-		}
-		d.setStage("playing")
-		if err = d.play(ctx, pcm); err != nil {
 			if ctx.Err() != nil {
 				failure = ctx.Err()
 			} else {
-				failure = errors.New("Не удалось воспроизвести ответ через ALSA")
+				failure = err
 			}
 			return
 		}
@@ -573,23 +620,23 @@ func (d *Daemon) askWithMode(text string, voice bool) error {
 	return nil
 }
 
-func playPCM(ctx context.Context, pcm []byte) error {
+func playPCM(ctx context.Context, pcm io.Reader) error {
 	cmd := exec.CommandContext(ctx, "/usr/bin/aplay", "-q", "-D", "default", "-t", "raw", "-f", "S16_LE", "-r", "24000", "-c", "1")
 	prepareChild(cmd)
-	cmd.Stdin = bytes.NewReader(pcm)
+	cmd.Stdin = pcm
 	cmd.WaitDelay = 2 * time.Second
 	return cmd.Run()
 }
 
 func quietAlice(ctx context.Context) {
-	_ = aliceCLI(ctx, []string{"c", "o"}, nil)
+	_ = aliceCLI(ctx, []string{"c", "o"}, nil, nil)
 }
 
-func listenAlice(ctx context.Context, starting func()) error {
-	return aliceCLI(ctx, []string{"c", "o", "s"}, starting)
+func listenAlice(ctx context.Context, acknowledge func() error, starting func()) error {
+	return aliceCLI(ctx, []string{"c", "o", "s"}, acknowledge, starting)
 }
 
-func aliceCLI(ctx context.Context, commands []string, starting func()) error {
+func aliceCLI(ctx context.Context, commands []string, acknowledge func() error, starting func()) error {
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/system/vendor/quasar/maind", "--cli")
@@ -603,21 +650,37 @@ func aliceCLI(ctx context.Context, commands []string, starting func()) error {
 	if err = cmd.Start(); err != nil {
 		return err
 	}
+	writeDone := make(chan error, 1)
 	go func() {
 		defer pipe.Close()
 		for _, part := range append(commands, "x") {
 			select {
 			case <-ctx.Done():
+				writeDone <- ctx.Err()
 				return
 			case <-time.After(350 * time.Millisecond):
+			}
+			if part == "s" && acknowledge != nil {
+				if err := acknowledge(); err != nil {
+					writeDone <- err
+					return
+				}
 			}
 			if part == "s" && starting != nil {
 				starting()
 			}
-			_, _ = io.WriteString(pipe, part+"\n")
+			if _, err := io.WriteString(pipe, part+"\n"); err != nil {
+				writeDone <- err
+				return
+			}
 		}
+		writeDone <- nil
 	}()
-	return cmd.Wait()
+	err = cmd.Wait()
+	if writeErr := <-writeDone; writeErr != nil {
+		return writeErr
+	}
+	return err
 }
 
 // Start at EOF so a restart never resends old conversations. Follow both rename
@@ -713,6 +776,11 @@ func (d *Daemon) handler() http.Handler {
 			err = d.update(data, true)
 		case "/test":
 			err = d.ask("Представься как голосовой помощник OpenAI одним коротким предложением.")
+		case "/greeting":
+			d.mu.Lock()
+			c := d.cfg
+			d.mu.Unlock()
+			_, err = d.greetingAudio(r.Context(), c)
 		case "/stop":
 			d.stop()
 		default:

@@ -947,13 +947,15 @@
     <div class="settings">
       <section class="card set-card">
         <div class="set-head"><div><h2>Автономный помощник</h2><p id="ai-state" role="status" aria-live="polite">Проверяем состояние…</p></div></div>
-        <p class="set-note">Скажите: <b id="ai-example">«Алиса, спроси GPT»</b>, дождитесь сигнала и задайте вопрос.<br>Можно произнести фразу и вопрос сразу. Алиса распознаёт речь, OpenAI отвечает синтезированным голосом. Распознавание требует связи с Яндексом.</p>
+        <p class="set-note">Скажите: <b id="ai-example">«Алиса, спроси GPT»</b>. После «Ага, слушаю» сразу задавайте вопрос.<br>Можно произнести фразу и вопрос сразу. Алиса распознаёт речь, OpenAI отвечает синтезированным голосом. Распознавание требует связи с Яндексом.</p>
         <div class="set-item"><div class="set-label"><b>Сервис на колонке</b><small id="ai-detail">Загрузка…</small></div><div class="set-ctl">
           <button class="btn primary" id="ai-install">Установить сервис</button><button class="btn sm" id="ai-refresh">Обновить статус</button>
           <button class="btn sm danger" id="ai-uninstall" hidden>Удалить сервис и ключи</button>
         </div></div>
         <p class="set-note" id="ai-error" role="alert" hidden></p>
         <p class="set-note" id="ai-voice-hint" role="status" hidden>Голосовой запуск выключен. Кнопка «Произнести тест» проверяет ответ OpenAI отдельно. Чтобы задавать вопросы голосом, включите «Голосовой запуск» ниже и нажмите «Сохранить».</p>
+        <p class="set-note" id="ai-speed"></p>
+        <div id="ai-sources-row" hidden><p class="set-note" id="ai-sources-note">Источники последнего ответа</p><div id="ai-sources" style="display:flex;gap:8px;flex-wrap:wrap"></div></div>
       </section>
       <section class="card set-card">
         <div class="set-head"><div><h2>OpenAI</h2><p>Нужен API-ключ проекта OpenAI; подписка ChatGPT не включает оплату API.</p></div></div>
@@ -961,9 +963,10 @@
           <fieldset id="ai-fields" disabled style="border:0;padding:0;margin:0;min-width:0">
             <label class="set-item"><div class="set-label"><b>Голосовой запуск</b><small>После настройки панель можно закрыть</small></div><div class="set-ctl"><input type="checkbox" class="switch" id="ai-enabled"></div></label>
             <label class="set-item"><div class="set-label"><b>API-ключ</b><small id="ai-key-state">Ключ не задан</small></div><div class="set-ctl"><input class="field" type="password" id="ai-key" placeholder="sk-…" autocomplete="new-password" maxlength="512" spellcheck="false"></div></label>
-            <label class="set-item"><div class="set-label"><b>Модель</b><small>Имя модели из вашего проекта OpenAI</small></div><div class="set-ctl"><input class="field" id="ai-model" value="gpt-5.6-terra" required maxlength="100" spellcheck="false"></div></label>
+            <label class="set-item"><div class="set-label"><b>Модель</b><small>GPT-6 Luna — для быстрых недорогих ответов. Можно указать другую доступную модель.</small></div><div class="set-ctl"><input class="field" id="ai-model" value="gpt-6-luna" list="ai-model-options" required maxlength="100" spellcheck="false"><datalist id="ai-model-options"><option value="gpt-6-luna"><option value="gpt-5.6-terra"></datalist></div></label>
+            <label class="set-item"><div class="set-label"><b>Поиск в интернете</b><small>Для свежих данных и просьб найти информацию. Поиск оплачивается отдельно и увеличивает время ответа.</small></div><div class="set-ctl"><input type="checkbox" class="switch" id="ai-web-search"></div></label>
             <label class="set-item"><div class="set-label"><b>Голос</b><small>Озвучка OpenAI</small></div><div class="set-ctl"><select id="ai-voice"><option value="coral">Coral</option><option value="marin">Marin</option><option value="cedar">Cedar</option><option value="alloy">Alloy</option><option value="nova">Nova</option><option value="onyx">Onyx</option><option value="sage">Sage</option></select></div></label>
-            <label class="set-item"><div class="set-label"><b>Фраза после «Алиса»</b><small>После фразы дождитесь сигнала и задайте вопрос</small></div><div class="set-ctl"><input class="field" id="ai-prefix" value="спроси gpt" required maxlength="60"></div></label>
+            <label class="set-item"><div class="set-label"><b>Фраза после «Алиса»</b><small>После «Ага, слушаю» сразу задавайте вопрос</small></div><div class="set-ctl"><input class="field" id="ai-prefix" value="спроси gpt" required maxlength="60"></div></label>
             <label class="set-item"><div class="set-label"><b>Как отвечать</b><small>Стиль и язык ответа</small></div><div class="set-ctl"><textarea class="field" id="ai-instructions" rows="3" maxlength="2000" style="width:100%;min-width:220px"></textarea></div></label>
             <div class="set-item"><div class="set-label"><small>Ключ хранится только на колонке с доступом root. Пустое поле оставляет прежний ключ.</small></div><div class="set-ctl">
               <button class="btn primary" type="submit">Сохранить</button><button class="btn sm" type="button" id="ai-test">Произнести тест</button><button class="btn sm" type="button" id="ai-stop">Остановить ответ</button><button class="btn sm danger" type="button" id="ai-clear">Удалить ключ</button>

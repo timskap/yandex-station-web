@@ -18,7 +18,7 @@ func finalVoice(text string) string {
 func activateVoice(t *testing.T, d *Daemon) {
 	t.Helper()
 	started := make(chan struct{})
-	d.listen = func(_ context.Context, starting func()) error { starting(); close(started); return nil }
+	d.listen = func(_ context.Context, _ func() error, starting func()) error { starting(); close(started); return nil }
 	d.handleVoice(finalVoice("Алиса, спроси ГПТ"))
 	select {
 	case <-started:
@@ -42,7 +42,7 @@ func TestTwoStepVoiceAndDirectQuestion(t *testing.T) {
 	defer srv.Close()
 	d := testDaemon(t, srv.URL)
 	defer d.stop()
-	d.play = func(context.Context, []byte) error { plays.Add(1); return nil }
+	d.play = func(_ context.Context, r io.Reader) error { _, err := io.Copy(io.Discard, r); plays.Add(1); return err }
 
 	d.handleVoice(finalVoice("Обычная команда Алисе"))
 	activateVoice(t, d)
@@ -135,14 +135,17 @@ func TestActivationGates(t *testing.T) {
 
 func TestStoppedListeningCannotBeRearmedByLateCLI(t *testing.T) {
 	d := testDaemon(t, "")
+	entered := make(chan struct{})
 	finished := make(chan struct{})
-	d.listen = func(ctx context.Context, starting func()) error {
+	d.listen = func(ctx context.Context, _ func() error, starting func()) error {
+		close(entered)
 		<-ctx.Done()
 		starting()
 		close(finished)
 		return errors.New("cancelled command")
 	}
 	d.handleVoice(finalVoice("Спроси GPT"))
+	<-entered
 	d.handleVoice("onAliceStateChanged: LISTENING, recognizedPhrase=''")
 	d.handleVoice(finalVoice("Реплика до запуска нового распознавания"))
 	if d.status()["requests"] != 0 {

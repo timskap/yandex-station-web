@@ -120,9 +120,13 @@ func testDaemon(t *testing.T, endpoint string) *Daemon {
 	c := defaults()
 	c.APIKey = "test-secret-DO-NOT-PRINT"
 	c.Enabled = true
-	return &Daemon{dir: t.TempDir(), cfg: c, vpn: &VPN{}, endpoint: endpoint, quiet: func(context.Context) {},
-		listen: func(_ context.Context, starting func()) error { starting(); return nil },
-		play:   func(context.Context, []byte) error { return nil }}
+	dir := t.TempDir()
+	if err := atomicWrite(greetingPath(dir, c.Voice), []byte{0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	return &Daemon{dir: dir, cfg: c, vpn: &VPN{}, endpoint: endpoint, quiet: func(context.Context) {},
+		listen: func(_ context.Context, _ func() error, starting func()) error { starting(); return nil },
+		play:   func(_ context.Context, r io.Reader) error { _, err := io.Copy(io.Discard, r); return err }}
 }
 
 func waitDone(t *testing.T, d *Daemon) {
@@ -169,7 +173,11 @@ func TestResponsesSpeechAndMemory(t *testing.T) {
 	defer srv.Close()
 	d := testDaemon(t, srv.URL)
 	var plays atomic.Int32
-	d.play = func(_ context.Context, b []byte) error {
+	d.play = func(_ context.Context, r io.Reader) error {
+		b, err := io.ReadAll(r)
+		if err != nil {
+			return err
+		}
 		if len(b) != 4 {
 			t.Error("bad PCM")
 		}

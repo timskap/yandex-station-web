@@ -6,7 +6,7 @@
     state = s;
     const ready = !!s.running;
     $('#ai-state').textContent = !s.installed ? 'Сервис ещё не установлен' : !ready ? 'Сервис остановлен' :
-      s.listening ? 'Слушаю вопрос…' :
+      s.listening ? (s.stage === 'greeting' ? 'Готовлю «Ага, слушаю»…' : 'Слушаю вопрос…') :
       s.busy ? ({thinking:'OpenAI готовит ответ…', speech:'Создаётся голос…', playing:'Колонка отвечает…'}[s.stage] || 'Обрабатываем вопрос…') :
       s.enabled ? 'Готов к голосовым вопросам' : 'Сервис запущен · голосовой запуск выключен';
     $('#ai-detail').textContent = ready ? `Версия ${s.version} · ${s.log_available ? 'распознавание доступно' : 'журнал распознавания пока недоступен'} · запросов: ${s.requests}` : 'ARM64 · автозапуск после включения колонки';
@@ -21,6 +21,20 @@
     $('#ai-error').textContent = s.error || '';
     $('#ai-voice-hint').hidden = !ready || !s.has_key || !!s.enabled;
     $('#ai-key-state').textContent = s.has_key ? 'Ключ сохранён на колонке' : 'Ключ не задан';
+    $('#ai-speed').textContent = s.first_audio_ms ? `Первое аудио последнего ответа: ${(s.first_audio_ms / 1000).toFixed(1)} с после распознавания вопроса` : '';
+    $('#ai-sources-row').hidden = !s.searched;
+    const sources = $('#ai-sources');
+    sources.replaceChildren();
+    for (const source of s.sources || []) {
+      let url;
+      try { url = new URL(source.url); } catch { continue; }
+      if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) continue;
+      const a = document.createElement('a');
+      a.href = url.href; a.textContent = source.title || url.hostname;
+      a.target = '_blank'; a.rel = 'noopener noreferrer'; a.className = 'btn sm';
+      sources.append(a);
+    }
+    $('#ai-sources-note').textContent = (s.sources || []).length ? 'Источники последнего ответа' : 'Поиск выполнен; ссылки на источники не возвращены';
     $('#ai-vpn-file-state').textContent = s.vpn_configured ? `Профиль сохранён${s.vpn_has_auth ? ', логин и пароль заданы' : ''}` : 'Не загружена';
     $('#ai-vpn-state').textContent = s.vpn_enabled ? (s.vpn_message || 'Подключаемся…') : 'VPN выключен';
     if (vpnResultKind === 'connection' && s.vpn_enabled) {
@@ -42,6 +56,7 @@
       $('#ai-prefix').value = s.prefix;
       $('#ai-instructions').value = s.instructions;
       $('#ai-voice').value = s.voice;
+      $('#ai-web-search').checked = !!s.web_search;
     }
     if ((fill === true || fill === 'vpn') && ready) {
       $('#ai-vpn-enabled').checked = !!s.vpn_enabled;
@@ -99,7 +114,7 @@
   $('#ai-form').onsubmit = e => {
     e.preventDefault();
     const data = {enabled:$('#ai-enabled').checked, model:$('#ai-model').value.trim(), voice:$('#ai-voice').value,
-      prefix:$('#ai-prefix').value.trim(), instructions:$('#ai-instructions').value.trim()};
+      prefix:$('#ai-prefix').value.trim(), instructions:$('#ai-instructions').value.trim(), web_search:$('#ai-web-search').checked};
     if ($('#ai-key').value.trim()) data.api_key = $('#ai-key').value.trim();
     command(e.submitter, 'config', data, 'Настройки OpenAI сохранены', () => { $('#ai-key').value = ''; });
   };

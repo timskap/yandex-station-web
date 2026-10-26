@@ -5,7 +5,7 @@ import vm from 'node:vm';
 const nodes = new Map();
 const $ = id => {
   if (!nodes.has(id)) nodes.set(id, {value:'', checked:false, files:[], hidden:true, disabled:false,
-    textContent:'', style:{}, setAttribute(){}});
+    textContent:'', style:{}, children:[], setAttribute(){}, replaceChildren(){this.children=[];}, append(n){this.children.push(n);}});
   return nodes.get(id);
 };
 let state = {running:true, installed:true, version:'test', model:'test', voice:'coral', prefix:'спроси gpt',
@@ -22,7 +22,7 @@ const api = async (path, body) => {
   return {...state};
 };
 vm.runInNewContext(fs.readFileSync(new URL('../static/assistant.js', import.meta.url), 'utf8'),
-  {$, window, api, online:false, setInterval(){}, toast(){}, confirm(){return false;}});
+  {$, window, api, URL, document:{createElement(){return {}; }}, online:false, setInterval(){}, toast(){}, confirm(){return false;}});
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const submit = async () => { $('#ai-vpn-form').onsubmit({preventDefault(){}, submitter:{}}); await settle(); };
 
@@ -70,5 +70,18 @@ await window.loadAssistant();
 assert.equal($('#ai-voice-hint').hidden, true);
 assert.equal($('#ai-state').textContent, 'Слушаю вопрос…');
 assert.equal($('#ai-example').textContent, '«Алиса, спроси gpt»');
+state = {...state, stage:'greeting', searched:true, first_audio_ms:1250, sources:[
+  {title:'Official source <script>', url:'https://example.com/news'}, {title:'Unsafe',url:'javascript:alert(1)'}]};
+await window.loadAssistant();
+assert.match($('#ai-state').textContent, /Ага, слушаю/);
+assert.equal($('#ai-sources-row').hidden, false);
+assert.equal($('#ai-sources').children.length, 1);
+assert.equal($('#ai-sources').children[0].textContent, 'Official source <script>');
+assert.equal($('#ai-sources').children[0].rel, 'noopener noreferrer');
+assert.match($('#ai-speed').textContent, /1.3 с/);
+state = {...state, searched:false, sources:[]};
+await window.loadAssistant();
+assert.equal($('#ai-sources-row').hidden, true);
+assert.equal($('#ai-sources').children.length, 0);
 
 console.log('Assistant UI: VPN save/connection, disabled voice hint and listening state passed');
