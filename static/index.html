@@ -982,9 +982,9 @@
     <header class="page-head"><div><h1>VPN</h1><div class="sub">Профиль и параметры подключения на колонке</div></div></header>
     <div class="settings">
       <section class="card set-card">
-        <div class="set-head"><div><h2>Red Shield VPN · OpenVPN</h2><p id="ai-vpn-state" role="status" aria-live="polite">Профиль ещё не загружен</p></div></div>
+        <div class="set-head"><div><h2>VPN · OpenVPN</h2><p id="ai-vpn-state" role="status" aria-live="polite">Профиль ещё не загружен</p></div></div>
         <div class="set-item" id="vpn-prepare-row" hidden><div class="set-label"><b>Сервис подключения</b><small>Установите сервис на колонку, затем добавьте профиль VPN</small></div><div class="set-ctl"><button class="btn primary" id="vpn-prepare">Подготовить колонку</button></div></div>
-        <p class="set-note">Скачайте .ovpn с встроенными сертификатами из личного кабинета Red Shield. Туннель используется для OpenAI; Алиса и локальное управление используют обычное соединение.</p>
+        <p class="set-note">Скачайте .ovpn со встроенными сертификатами из личного кабинета вашего VPN-провайдера. Туннель используется для OpenAI; Алиса и локальное управление используют обычное соединение.</p>
         <div class="set-item"><div class="set-label"><b>Клиент OpenVPN</b><small>Совместимый клиент для подключения на колонке</small></div><div class="set-ctl"><button class="btn sm" id="ai-vpn-install" disabled>Установить OpenVPN</button></div></div>
         <form id="ai-vpn-form" autocomplete="off">
           <fieldset id="ai-vpn-fields" disabled style="border:0;padding:0;margin:0;min-width:0">
@@ -992,7 +992,7 @@
             <label class="set-item"><div class="set-label"><b>Конфигурация .ovpn</b><small id="ai-vpn-file-state">Не загружена</small></div><div class="set-ctl"><input type="file" id="ai-vpn-file" accept=".ovpn,text/plain" style="max-width:260px"></div></label>
             <details class="set-note"><summary>Или вставить профиль VPN текстом</summary><label for="ai-vpn-config">Полное содержимое .ovpn, включая сертификаты</label><textarea class="field" id="ai-vpn-config" rows="8" maxlength="262144" autocomplete="off" spellcheck="false" placeholder="client&#10;dev tun&#10;remote …&#10;&lt;ca&gt;&#10;…&#10;&lt;/ca&gt;" style="width:100%;font-family:monospace"></textarea></details>
             <label class="set-item"><div class="set-label"><b>Логин VPN</b><small>Если профиль требует auth-user-pass</small></div><div class="set-ctl"><input class="field" id="ai-vpn-user" autocomplete="off" maxlength="512" spellcheck="false" placeholder="Сохранить прежнее значение"></div></label>
-            <label class="set-item"><div class="set-label"><b>Пароль VPN</b><small>Пароль подключения из кабинета Red Shield</small></div><div class="set-ctl"><input class="field" type="password" id="ai-vpn-password" autocomplete="new-password" maxlength="512" placeholder="Сохранить прежнее значение"></div></label>
+            <label class="set-item"><div class="set-label"><b>Пароль VPN</b><small>Пароль подключения из кабинета VPN-провайдера</small></div><div class="set-ctl"><input class="field" type="password" id="ai-vpn-password" autocomplete="new-password" maxlength="512" placeholder="Сохранить прежнее значение"></div></label>
             <label class="set-item"><div class="set-label"><b>DNS внутри VPN</b><small>Для подключения к OpenAI</small></div><div class="set-ctl"><input class="field" id="ai-vpn-dns" value="1.1.1.1" required maxlength="15"></div></label>
             <div class="set-item"><div class="set-label"><small>Профиль и пароль не включаются в резервную копию панели.</small></div><div class="set-ctl"><button class="btn primary" type="submit">Сохранить профиль</button><button class="btn primary" type="button" id="ai-vpn-connect" hidden>Подключить VPN</button><button class="btn sm" type="button" id="ai-vpn-disconnect" hidden>Отключить VPN</button><button class="btn sm danger" type="button" id="ai-vpn-clear">Удалить профиль</button></div></div>
           </fieldset>

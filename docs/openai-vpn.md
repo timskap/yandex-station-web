@@ -1,4 +1,4 @@
-# Автономный OpenAI и Red Shield VPN
+# Автономный OpenAI и VPN
 
 Во вкладке **OpenAI** задаются API-ключ, модель, голос и фраза запуска. Во вкладке
 **VPN** загружается `.ovpn` или вставляется его текст, а также вводятся логин,
@@ -9,7 +9,7 @@
 1. Откройте **OpenAI → Установить сервис**. В **VPN** та же подготовка доступна
    кнопкой **Подготовить колонку**. Для сборки из исходников нужен Go 1.23+ на
    компьютере с панелью. Готовые сборки Windows и Docker включают ARM64-бинарник.
-2. В **VPN** нажмите **Установить OpenVPN**, затем загрузите конфигурацию Red Shield
+2. В **VPN** нажмите **Установить OpenVPN**, затем загрузите конфигурацию вашего VPN
    из личного кабинета или вставьте её полное содержимое. Нужен профиль OpenVPN
    `tun` со встроенными сертификатами. Если он содержит `auth-user-pass`, заполните
    логин и пароль подключения из кабинета VPN. **Сохранить профиль** записывает
@@ -132,7 +132,7 @@ python3 -m unittest discover -s tests -v
 ротацию журнала, Responses → Speech, кэш приветствия, начало воспроизведения до конца
 загрузки, отмену аудиопотока, извлечение безопасных ссылок, настройки поиска, контекст,
 отмену запроса и блокировку запросов без подключённого VPN. Они используют
-локальный имитатор API. Проверка с настоящими OpenAI и Red Shield требует ключа
+локальный имитатор API. Проверка с настоящими OpenAI и VPN требует ключа
 и профиля, введённых пользователем в интерфейсе.
 
 Официальные материалы:
@@ -140,5 +140,4 @@ python3 -m unittest discover -s tests -v
 [Speech API](https://developers.openai.com/api/docs/guides/text-to-speech),
 [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna),
 [Web search](https://developers.openai.com/api/docs/guides/tools-web-search),
-[Red Shield VPN](https://redshieldvpn.com/en/faq),
 [OpenVPN 2.6](https://openvpn.net/community-docs/community-articles/openvpn-2-6-manual/).

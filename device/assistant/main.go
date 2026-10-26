@@ -123,7 +123,7 @@ func (d *Daemon) update(data []byte, vpn bool) error {
 				return err
 			}
 			if auth && (c.VPNUser == "" || c.VPNPassword == "") {
-				return errors.New("Профиль требует логин и пароль Red Shield")
+				return errors.New("Профиль VPN требует логин и пароль подключения")
 			}
 			if _, err = os.Stat("/opt/sbin/openvpn"); err != nil {
 				return errors.New("Сначала установите OpenVPN")

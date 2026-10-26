@@ -325,7 +325,7 @@ func (v *VPN) ensure(c Config) {
 			return
 		}
 		cmd.Stderr = cmd.Stdout
-		v.set("connecting", "Подключение к Red Shield VPN", false)
+		v.set("connecting", "Подключение к VPN", false)
 		if err = cmd.Start(); err != nil {
 			v.set("error", "Не удалось запустить OpenVPN", false)
 			return
@@ -347,12 +347,12 @@ func (v *VPN) ensure(c Config) {
 					v.set("connected", "Только запросы OpenAI идут через VPN", true)
 				}
 			} else if strings.Contains(line, "AUTH_FAILED") {
-				v.set("error", "Red Shield отклонил логин или пароль", false)
+				v.set("error", "VPN-сервер отклонил логин или пароль", false)
 				cancel()
 			} else if strings.Contains(line, "Attempting to establish TCP connection") {
-				v.set("connecting", "Пробуем TCP-соединение с Red Shield VPN", false)
+				v.set("connecting", "Пробуем TCP-соединение с VPN", false)
 			} else if strings.Contains(line, "UDP link remote:") {
-				v.set("connecting", "Пробуем UDP-соединение с Red Shield VPN", false)
+				v.set("connecting", "Пробуем UDP-соединение с VPN", false)
 			} else if strings.Contains(line, "VERIFY ERROR") {
 				v.set("error", "Не удалось проверить сертификат VPN-сервера", false)
 				cancel()

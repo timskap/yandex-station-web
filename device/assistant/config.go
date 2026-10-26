@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 const defaultDir = "/data/quasar/webpanel/assistant"
 const maindLog = "/data/quasar/daemons_logs/maind.log"
 

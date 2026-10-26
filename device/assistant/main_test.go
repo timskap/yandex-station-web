@@ -16,11 +16,11 @@ import (
 
 const profile = "client\ndev tun\nproto udp\nremote vpn.example.test 1194\nauth-user-pass\n<ca>\nTEST-CA\n</ca>\nredirect-gateway def1\ndhcp-option DNS 9.9.9.9\n"
 
-func TestRedShieldQuotedDNS(t *testing.T) {
+func TestOpenVPNQuotedDNS(t *testing.T) {
 	src := profile + "pull-filter ignore \"dns\"\ndhcp-option DNS \"1.1.1.1\"\n"
 	got, auth, err := sanitizeOVPN(src)
 	if err != nil || !auth {
-		t.Fatal("quoted Red Shield profile rejected", err)
+		t.Fatal("quoted OpenVPN profile rejected", err)
 	}
 	if !strings.Contains(got, "pull-filter ignore dns") || strings.Contains(got, "dhcp-option DNS") {
 		t.Fatal("DNS policy changed")
